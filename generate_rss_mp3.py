@@ -4,18 +4,17 @@ import datetime
 import xml.etree.ElementTree as ET
 
 # Configuration
-BASE_URL = "https://amletdotco.github.io/fotf-ainran/audio"  # Base URL for audio files
-ARTWORK_URL = "https://amletdotco.github.io/fotf-ainran/images/podcast_artwork.png"  # URL for podcast artwork
-OUTPUT_FILE = "podcast_feed.xml"  # Output RSS file
+BASE_URL = "https://amletdotco.github.io/fotf-ainran/audio"
+ARTWORK_URL = "https://amletdotco.github.io/fotf-ainran/images/podcast_artwork.png"
+OUTPUT_FILE = "podcast_feed.xml"
 PODCAST_TITLE = "The Chronicles of Narnia (Radio Theatre)"
 PODCAST_DESCRIPTION = "Focus on the Family's The Chronicles of Narnia Radio Theatre"
 PODCAST_LANGUAGE = "en-us"
-PODCAST_LINK = "https://amletdotco.github.io/fotf-ainran/"  # Podcast homepage
+PODCAST_LINK = "https://amletdotco.github.io/fotf-ainran/"
 
-# Narnia books in chronological order
 NARNIA_ORDER = [
-    "The Magician's Nephew",
-    "The Lion, the Witch and the Wardrobe",
+    "The Magicians Nephew",
+    "The Lion the Witch and the Wardrobe",
     "The Horse and His Boy",
     "Prince Caspian",
     "The Voyage of the Dawn Treader",
@@ -24,30 +23,36 @@ NARNIA_ORDER = [
 ]
 
 
-# Helper function to prettify episode names
+def normalize_string(s):
+    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+
+
 def prettify_name(file_name):
+    # Remove extension
     name = os.path.splitext(file_name)[0]
-    name = re.sub(r"^\d+_", "", name)  # Remove leading numbers
-    name = name.replace("_", " ").strip()  # Replace underscores with spaces
-    part_match = re.search(r"(Part \d+ of \d+)", name, flags=re.IGNORECASE)
-    if part_match:
-        part_info = part_match.group(1)
-        name = re.sub(r"\s*\(Part \d+ of \d+\)", "", name)  # Remove duplicate part info
-        name += f" ({part_info})"  # Append prettified part info
-    return name
+    # Remove leading numeric prefix and underscore
+    name = re.sub(r"^\d+_", "", name)
+    name = name.replace("_", " ").strip()
+    return name, None  # No longer extracting part info for sorting purposes
 
 
-# Extract book name from the file name and find its order
 def get_book_order(file_name):
+    file_normalized = normalize_string(file_name)
     for index, book in enumerate(NARNIA_ORDER):
-        if book.lower() in file_name.lower():
+        book_normalized = normalize_string(book)
+        if book_normalized in file_normalized:
             return index
-    return float("inf")  # Default to end of list if not found
+    return float("inf")
 
 
-# Generate the RSS feed
+def get_numeric_prefix(file_name):
+    match = re.match(r"^(\d+)", file_name)
+    if match:
+        return int(match.group(1))
+    return 999999999
+
+
 def generate_rss(audio_folder):
-    # Create root RSS element
     rss = ET.Element(
         "rss",
         version="2.0",
@@ -55,53 +60,56 @@ def generate_rss(audio_folder):
     )
     channel = ET.SubElement(rss, "channel")
 
-    # Add podcast metadata
     ET.SubElement(channel, "title").text = PODCAST_TITLE
     ET.SubElement(channel, "link").text = PODCAST_LINK
     ET.SubElement(channel, "description").text = PODCAST_DESCRIPTION
     ET.SubElement(channel, "language").text = PODCAST_LANGUAGE
-    ET.SubElement(channel, "itunes:image", href=ARTWORK_URL)  # Add podcast artwork
+    ET.SubElement(channel, "itunes:image", href=ARTWORK_URL)
 
-    # Get all audio files and sort by book order
     audio_files = [
         file_name
         for file_name in os.listdir(audio_folder)
         if file_name.endswith(".mp3")
     ]
-    audio_files.sort(key=lambda f: (get_book_order(f), prettify_name(f)))
+    # Sort by book order then by numeric prefix
+    audio_files.sort(key=lambda f: (get_book_order(f), get_numeric_prefix(f)))
 
-    # Generate publish dates in ascending order
-    base_date = datetime.datetime.now() - datetime.timedelta(days=len(audio_files))
+    total = len(audio_files)
+    base_date = datetime.datetime.now()
+
+    # Assign dates so the first item in the sorted list is the oldest.
+    # If you actually prefer the first item to be oldest, we can keep the order:
+    # index 0 is oldest -> idx = 0 -> no offset or negative offset needed.
     for idx, file_name in enumerate(audio_files):
         file_path = os.path.join(audio_folder, file_name)
         file_url = f"{BASE_URL}/{file_name}"
         file_size = os.path.getsize(file_path)
 
-        # Create an <item> element for each episode
+        title, _ = prettify_name(file_name)
+        description = f"Description for {title}"
+
         item = ET.SubElement(channel, "item")
-        ET.SubElement(item, "title").text = prettify_name(file_name)
-        ET.SubElement(item, "description").text = (
-            f"Description for {prettify_name(file_name)}"
-        )
+        ET.SubElement(item, "title").text = title
+        ET.SubElement(item, "description").text = description
         ET.SubElement(
             item,
             "enclosure",
             {"url": file_url, "length": str(file_size), "type": "audio/mpeg"},
         )
-        pub_date = (base_date + datetime.timedelta(days=idx)).strftime(
+
+        # Assign a date in ascending order (first file is oldest)
+        pub_date = (base_date - datetime.timedelta(days=(total - idx - 1))).strftime(
             "%a, %d %b %Y %H:%M:%S GMT"
         )
         ET.SubElement(item, "pubDate").text = pub_date
 
-    # Write the RSS feed to the output file
     tree = ET.ElementTree(rss)
     tree.write(OUTPUT_FILE, encoding="utf-8", xml_declaration=True)
     print(f"RSS feed generated: {OUTPUT_FILE}")
 
 
-# Main script
 if __name__ == "__main__":
-    audio_folder = "audio"  # Path to your audio folder
+    audio_folder = "audio"
     if not os.path.exists(audio_folder):
         print(f"Error: Folder '{audio_folder}' does not exist.")
     else:
